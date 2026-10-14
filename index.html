@@ -258,6 +258,13 @@ async function getBlob(f){
   await dbPut(f.id,{blob,mtime:f.modifiedTime,name:f.name});
   return blob;
 }
+const MIME={hwp:'application/x-hwp',hwpx:'application/vnd.hancom.hwpx',doc:'application/msword',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xls:'application/vnd.ms-excel',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',ppt:'application/vnd.ms-powerpoint',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',zip:'application/zip',txt:'text/plain'};
+const mimeOf=(name,blob)=>MIME[(name.split('.').pop()||'').toLowerCase()]||blob.type||'application/octet-stream';
+function showAction(msg,label,fn){
+  const s=$('#status');s.textContent=msg+' ';
+  const b=document.createElement('button');b.textContent=label;b.className='primary';b.style.marginLeft='6px';
+  b.onclick=()=>{fn();setStatus('')};s.appendChild(b);
+}
 const VIEWABLE=n=>/\.(pdf|jpe?g|png|gif|webp|heic|mp4|mov|m4v|webm)$/i.test(n);
 function saveToDevice(blob,name){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
@@ -267,7 +274,19 @@ async function openFile(f){
   // 앱 안에서 볼 수 없는 형식(한글 등)은 중간 화면 없이 바로 기기로 받는다 -> 닫는 단계가 줄어든다. 안 되면 아래의 기존 화면으로 넘어간다.
   if(!VIEWABLE(f.name)&&!f.mimeType.startsWith('application/vnd.google-apps')){
     try{
-      const b=await getBlob(f);saveToDevice(b,f.name);
+      const b=await getBlob(f);
+      const file=new File([b],f.name,{type:mimeOf(f.name,b)});
+      // 1) 바로 공유 창을 띄운다(한컴 뷰어 등). 형식을 정확히 알려줘야 공유 목록에 해당 앱이 나온다.
+      if(navigator.canShare&&navigator.canShare({files:[file]})){
+        try{await navigator.share({files:[file],title:f.name});render();return}
+        catch(err){
+          if(err&&err.name==='AbortError'){
+            showAction('공유 창을 닫았습니다. 목록에 한컴이 없으면 →','기기로 받기',()=>saveToDevice(file,f.name));render();return;
+          }
+        }
+      }
+      // 2) 공유를 못 쓰면 기기로 받기
+      saveToDevice(file,f.name);
       setStatus(f.name+' 을(를) 받았습니다. 사파리 주소창 옆 다운로드(↓) 표시에서 열어 주세요.');render();return;
     }catch(e){/* 받기에 실패하면 아래 화면으로 */}
   }
@@ -301,7 +320,7 @@ async function openFile(f){
     d.innerHTML='이 형식은 앱 안에서 바로 볼 수 없습니다.<br>';
     // 아이패드/갤럭시탭의 공유 시트로 한컴 뷰어 등 설치된 앱에 바로 넘긴다(지원되는 경우만 버튼 표시)
     try{
-      const file=new File([blob],f.name,{type:blob.type||'application/octet-stream'});
+      const file=new File([blob],f.name,{type:mimeOf(f.name,blob)});
       if(navigator.canShare&&navigator.canShare({files:[file]})){
         const b=document.createElement('button');b.className='primary';b.textContent='다른 앱으로 열기 (공유)';
         b.style.cssText='display:block;margin:16px auto 0;font-size:16px;padding:12px 22px';

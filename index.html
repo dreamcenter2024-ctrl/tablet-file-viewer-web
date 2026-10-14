@@ -311,7 +311,12 @@ $('#btnAll').onclick=async()=>{
 };
 
 // ---------- 시작 ----------
-if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+if('serviceWorker' in navigator){
+  const hadCtl=!!navigator.serviceWorker.controller;
+  // 새 버전의 저장 장치가 켜지면(이전 버전이 있던 경우만) 한 번 새로고침해서 최신 화면으로 바꾼다
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadCtl&&!window.__rl){window.__rl=1;location.reload()}});
+  navigator.serviceWorker.register('sw.js').then(reg=>reg.update()).catch(()=>{});
+}
 (async function(){
   await loadSaved();
   try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(e){files=[]}

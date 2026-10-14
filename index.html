@@ -95,8 +95,11 @@ function initAuth(){
   tc=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,callback:r=>{
     if(r.error){setStatus('로그인 실패: '+r.error);$('#login').style.display='block';return}
     token=r.access_token;tokenExp=Date.now()+(r.expires_in||3600)*1000;
-    try{localStorage.setItem('ka_tok',JSON.stringify({tok:token,exp:tokenExp}))}catch(e){}
+    try{localStorage.setItem('ka_tok',JSON.stringify({tok:token,exp:tokenExp}));localStorage.setItem('ka_signed','1')}catch(e){}
     $('#login').style.display='none';refresh();
+  },error_callback:e=>{ // 조용한 재로그인이 팝업 차단 등으로 안 될 때: 버튼을 눌러 한 번에 다시 연결
+    $('#login').style.display='block';
+    setStatus('저장된 파일은 그대로 열 수 있습니다. 새 목록을 받으려면 아래 버튼을 한 번 눌러 주세요.');
   }});
   return true;
 }
@@ -307,8 +310,16 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(
   // GIS 스크립트가 늦게 올 수 있어 잠시 기다림
   let t=0;const iv=setInterval(()=>{
     if(initAuth()||++t>20){clearInterval(iv);
-      if(!token){ $('#login').style.display=files.length&&!navigator.onLine?'none':'block';
-        if(!navigator.onLine&&files.length)setStatus('오프라인: 저장된 파일만 열 수 있습니다.');}}
+      if(!token){
+        if(!navigator.onLine){ $('#login').style.display=files.length?'none':'block';
+          if(files.length)setStatus('오프라인: 저장된 파일만 열 수 있습니다.'); }
+        else{
+          // 전에 로그인한 적이 있으면 로그인 창 없이 조용히 새 토큰을 요청(2단계 인증 없이 이어지는 경우가 대부분). 안 되면 버튼 표시.
+          let was=false;try{was=!!localStorage.getItem('ka_signed')}catch(e){}
+          if(was&&tc){try{tc.requestAccessToken({prompt:''})}catch(e){$('#login').style.display='block'}}
+          else $('#login').style.display='block';
+        }
+      }}
   },300);
 })();
 </script>

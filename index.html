@@ -32,6 +32,13 @@ button.primary{background:var(--accent)}
 .ok{background:#d9f2d9;color:#176b17}
 .no{background:#eee;color:#666}
 .time{font-size:11px;color:#445;flex:none}
+.msg.me{flex-direction:row-reverse}
+.msg.me .row{flex-direction:row-reverse}
+.msg.me .bubble{background:var(--accent);border-radius:14px 4px 14px 14px}
+.msg.me .col{display:flex;flex-direction:column;align-items:flex-end}
+.bubble.text{cursor:default;min-width:0;white-space:pre-wrap;word-break:break-word;font-size:15px}
+.bubble.gone{opacity:.6;cursor:default}
+.sysmsg{margin:10px auto;max-width:90%;text-align:center;font-size:12px;color:#fff;background:rgba(0,0,0,.14);padding:5px 12px;border-radius:12px}
 #login{margin:40px auto;max-width:420px;text-align:center;padding:0 20px}
 #viewer{position:fixed;inset:0;background:#111;z-index:20;display:none;flex-direction:column}
 #viewer.on{display:flex}
@@ -70,6 +77,7 @@ const SCOPE='https://www.googleapis.com/auth/drive.readonly';
 const MAX_AUTO=150*1024*1024; // 모두 받기에서 건너뛸 큰 파일
 const $=s=>document.querySelector(s);
 let token=null, tokenExp=0, tc=null, files=[], saved={}; // saved[id]=mtime
+let chatFolders=[], chatMsgs=[];
 
 // ---------- 저장소(IndexedDB): 받아 둔 파일 ----------
 const DB=()=>new Promise((res,rej)=>{const q=indexedDB.open('ka_viewer',1);q.onupgradeneeded=()=>q.result.createObjectStore('blobs');q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)});
@@ -116,24 +124,66 @@ async function children(id){
 }
 async function collect(id,path,depth,acc){
   for(const f of await children(id)){
-    if(f.mimeType==='application/vnd.google-apps.folder'){if(depth<4)await collect(f.id,path?path+' / '+f.name:f.name,depth+1,acc)}
+    if(f.mimeType==='application/vnd.google-apps.folder'){
+      // kakaochats 폴더는 파일 목록에 넣지 않고, 대화 기록(txt) 읽기에만 쓴다
+      if(f.name.toLowerCase()==='kakaochats'){chatFolders.push(f.id);continue}
+      if(depth<4)await collect(f.id,path?path+' / '+f.name:f.name,depth+1,acc)
+    }
     else{f.path=path;acc.push(f)}
   }
+}
+
+// ---------- 대화 기록(카톡 '대화 내용 내보내기' txt) ----------
+const SELF_NAMES=['한국시각학습지원센터']; // 이 폰 주인(오른쪽 노란 말풍선으로 표시)
+function parseChat(txt,room){
+  const out=[],rx=/^(\d{4})년 (\d+)월 (\d+)일 (오전|오후) (\d+):(\d+), (.*)$/;
+  let last=0;
+  txt.replace(/^﻿/,'').split(/\r?\n/).forEach((line,i)=>{
+    if(i===0||!line.trim()||line.startsWith('저장한 날짜'))return;
+    const m=rx.exec(line);
+    if(!m){
+      if(line.startsWith('메시지가 삭제되었습니다')){out.push({t:last,kind:'sys',text:line.trim(),room})}
+      else if(out.length&&out[out.length-1].kind==='text'&&!/^\d{4}년 /.test(line)){out[out.length-1].text+='\n'+line} // 여러 줄 메시지
+      return;
+    }
+    const h=(+m[5])%12+(m[4]==='오후'?12:0);
+    last=new Date(+m[1],+m[2]-1,+m[3],h,+m[6]).getTime();
+    const rest=m[7],p=rest.indexOf(' : ');
+    if(p<0){out.push({t:last,kind:'sys',text:rest,room});return}
+    const sender=rest.slice(0,p),text=rest.slice(p+3);
+    if(text.startsWith('파일: '))out.push({t:last,kind:'file',sender,name:text.slice(4),room});
+    else out.push({t:last,kind:'text',sender,text,room});
+  });
+  return out;
+}
+async function loadChats(){
+  const all=[];
+  for(const id of chatFolders){
+    for(const f of await children(id)){
+      if(!/\.txt$/i.test(f.name))continue;
+      const t=await (await api(`files/${f.id}`,{alt:'media'})).text();
+      all.push(...parseChat(t,f.name.replace(/\.txt$/i,'')));
+    }
+  }
+  chatMsgs=all;
+  try{localStorage.setItem('ka_chat',JSON.stringify(chatMsgs))}catch(e){}
 }
 async function refresh(){
   setStatus('목록 불러오는 중…');
   try{
     const roots=(await (await api('files',{q:`(${ROOT_NAMES.map(n=>`name='${n}'`).join(' or ')}) and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)'})).json()).files||[];
     if(!roots.length){setStatus(`드라이브에서 '${ROOT_NAMES[0]}' 폴더를 찾지 못했습니다.`);return}
-    const acc=[];for(const r of roots)await collect(r.id,'',0,acc);
+    const acc=[];chatFolders=[];for(const r of roots)await collect(r.id,'',0,acc);
     acc.sort((a,b)=>new Date(a.createdTime)-new Date(b.createdTime));
     files=acc;
     try{localStorage.setItem('ka_list',JSON.stringify(files))}catch(e){}
-    setStatus('');
+    try{await loadChats()}catch(e){if(e.message==='auth')throw e;setStatus('대화 기록을 읽지 못했습니다.');}
+    if(!$('#status').textContent)setStatus('');
   }catch(e){
     if(e.message==='auth'){setStatus('로그인이 만료되었습니다. 다시 로그인하세요.');$('#login').style.display='block';return}
     setStatus('목록을 불러오지 못했습니다(오프라인?). 저장된 목록을 보여줍니다.');
     try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(_){files=[]}
+    try{chatMsgs=JSON.parse(localStorage.getItem('ka_chat')||'[]')}catch(_){chatMsgs=[]}
   }
   await render();
 }
@@ -144,20 +194,44 @@ async function loadSaved(){saved={};for(const k of await dbKeys()){const v=await
 async function render(){
   await loadSaved();
   const L=$('#list');L.innerHTML='';
+  // 대화 기록과 드라이브 파일을 합쳐 시간순 목록을 만든다(파일은 이름으로 짝지음)
+  const used=new Set(),byName={},items=[];
+  files.forEach(f=>(byName[f.name]=byName[f.name]||[]).push(f));
+  for(const m of chatMsgs){
+    if(m.kind==='file'){
+      const f=(byName[m.name]||[]).find(x=>!used.has(x.id));
+      if(f){used.add(f.id);items.push({t:m.t,kind:'file',f,sender:m.sender})}
+      else items.push({t:m.t,kind:'gone',name:m.name,sender:m.sender});
+    }else items.push(m);
+  }
+  for(const f of files)if(!used.has(f.id))items.push({t:new Date(f.createdTime).getTime(),kind:'file',f,sender:f.path||'파일'});
+  items.sort((a,b)=>a.t-b.t);
   let lastDay='';
-  for(const f of files){
-    const d=new Date(f.createdTime);
-    const day=d.toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
+  const mk=(it,inner,cls)=>{
+    const me=SELF_NAMES.includes(it.sender);
+    const m=document.createElement('div');m.className='msg'+(me?' me':'');
+    m.innerHTML=(me?'':`<div class="avatar">${it.kind==='text'?'💬':'📂'}</div>`)+`<div class="col">${me?'':'<div class="who"></div>'}<div class="row"><div class="bubble ${cls||''}"></div><div class="time"></div></div></div>`;
+    if(!me)m.querySelector('.who').textContent=it.sender||'';
+    m.querySelector('.bubble').appendChild(inner);
+    m.querySelector('.time').textContent=new Date(it.t).toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'});
+    return m;
+  };
+  for(const it of items){
+    const day=new Date(it.t).toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
     if(day!==lastDay){const e=document.createElement('div');e.className='date';e.textContent=day;L.appendChild(e);lastDay=day}
-    const isSaved=saved[f.id]===f.modifiedTime;
-    const m=document.createElement('div');m.className='msg';
-    m.innerHTML=`<div class="avatar">📂</div><div class="col"><div class="who"></div><div class="row"><div class="bubble"><div class="fname"></div><div class="meta"></div></div><div class="time"></div></div></div>`;
-    m.querySelector('.who').textContent=f.path||'파일';
-    m.querySelector('.fname').textContent=ICON(f.name)+' '+f.name;
-    m.querySelector('.meta').innerHTML=(sizeText(f.size)||'')+`<span class="badge ${isSaved?'ok':'no'}">${isSaved?'저장됨':'아직 안 받음'}</span>`;
-    m.querySelector('.time').textContent=d.toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'});
-    m.querySelector('.bubble').onclick=()=>openFile(f);
-    L.appendChild(m);
+    if(it.kind==='sys'){const e=document.createElement('div');e.className='sysmsg';e.textContent=it.text;L.appendChild(e);continue}
+    if(it.kind==='text'){const d=document.createElement('div');d.textContent=it.text;L.appendChild(mk(it,d,'text'));continue}
+    if(it.kind==='gone'){
+      const d=document.createElement('div');
+      d.innerHTML='<div class="fname"></div><div class="meta">파일을 찾을 수 없음(기간 만료 또는 아직 올라오지 않음)</div>';
+      d.querySelector('.fname').textContent=ICON(it.name)+' '+it.name;L.appendChild(mk(it,d,'gone'));continue;
+    }
+    const f=it.f,isSaved=saved[f.id]===f.modifiedTime;
+    const d=document.createElement('div');
+    d.innerHTML='<div class="fname"></div><div class="meta"></div>';
+    d.querySelector('.fname').textContent=ICON(f.name)+' '+f.name;
+    d.querySelector('.meta').innerHTML=(sizeText(f.size)||'')+`<span class="badge ${isSaved?'ok':'no'}">${isSaved?'저장됨':'아직 안 받음'}</span>`;
+    const m=mk(it,d);m.querySelector('.bubble').onclick=()=>openFile(f);L.appendChild(m);
   }
   window.scrollTo(0,document.body.scrollHeight);
   const todo=files.filter(f=>saved[f.id]!==f.modifiedTime).length;
@@ -227,7 +301,8 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(
 (async function(){
   await loadSaved();
   try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(e){files=[]}
-  if(files.length)await render();
+  try{chatMsgs=JSON.parse(localStorage.getItem('ka_chat')||'[]')}catch(e){chatMsgs=[]}
+  if(files.length||chatMsgs.length)await render();
   if(loadToken()){$('#btnRef').style.display='inline-block';refresh();return}
   // GIS 스크립트가 늦게 올 수 있어 잠시 기다림
   let t=0;const iv=setInterval(()=>{

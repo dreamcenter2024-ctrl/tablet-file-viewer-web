@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>태블릿 자료</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#abc1d1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root{--bg:#abc1d1;--bar:#9bb3c4;--bubble:#fff;--ink:#222;--sub:#556;--accent:#fae100}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+#top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:var(--bar)}
+#top h1{margin:0;font-size:18px;flex:1}
+button{font:inherit;border:0;border-radius:18px;padding:8px 14px;background:#fff;color:var(--ink)}
+button.primary{background:var(--accent)}
+#status{padding:6px 14px;font-size:13px;color:var(--sub)}
+#list{padding:6px 12px 80px}
+.date{margin:16px auto 8px;width:max-content;padding:4px 14px;border-radius:14px;background:rgba(0,0,0,.18);color:#fff;font-size:12px}
+.msg{display:flex;gap:8px;margin:8px 0;align-items:flex-start}
+.avatar{width:38px;height:38px;border-radius:14px;background:#7d98ad;color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+.col{min-width:0;max-width:min(78%,560px)}
+.who{font-size:12px;color:#334;margin:0 0 3px 2px}
+.row{display:flex;align-items:flex-end;gap:6px}
+.bubble{background:var(--bubble);border-radius:4px 14px 14px 14px;padding:10px 12px;min-width:150px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.bubble:active{filter:brightness(.93)}
+.fname{font-size:15px;font-weight:600;word-break:break-all}
+.meta{font-size:12px;color:var(--sub);margin-top:4px}
+.badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;margin-left:6px}
+.ok{background:#d9f2d9;color:#176b17}
+.no{background:#eee;color:#666}
+.time{font-size:11px;color:#445;flex:none}
+#login{margin:40px auto;max-width:420px;text-align:center;padding:0 20px}
+#viewer{position:fixed;inset:0;background:#111;z-index:20;display:none;flex-direction:column}
+#viewer.on{display:flex}
+#vbar{display:flex;gap:8px;align-items:center;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:#222;color:#fff}
+#vtitle{flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#vbody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;text-align:center}
+#vbody canvas{display:block;margin:0 auto 8px;max-width:100%;background:#fff}
+#vbody img,#vbody video{max-width:100%;max-height:100%}
+#vbody .other{color:#fff;padding:40px 20px}
+a.dl{display:inline-block;margin-top:16px;padding:12px 20px;border-radius:20px;background:var(--accent);color:#111;text-decoration:none}
+</style>
+</head>
+<body>
+<div id="top">
+  <h1>태블릿 자료</h1>
+  <button id="btnAll" class="primary" style="display:none">새 파일 모두 받기</button>
+  <button id="btnRef" style="display:none">새로고침</button>
+</div>
+<div id="status"></div>
+<div id="login" style="display:none">
+  <p>구글 계정으로 로그인하면 드라이브의 <b>태블릿자료</b> 폴더가 카톡처럼 보입니다.</p>
+  <button id="btnLogin" class="primary">구글로 로그인</button>
+</div>
+<div id="list"></div>
+<div id="viewer">
+  <div id="vbar"><button id="vclose">닫기</button><div id="vtitle"></div></div>
+  <div id="vbody"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+const CLIENT_ID='295721508542-9t99o38p451rph28b1bf83u1ibi3hrq3.apps.googleusercontent.com';
+const ROOT_NAME='태블릿자료';
+const SCOPE='https://www.googleapis.com/auth/drive.readonly';
+const MAX_AUTO=150*1024*1024; // 모두 받기에서 건너뛸 큰 파일
+const $=s=>document.querySelector(s);
+let token=null, tokenExp=0, tc=null, files=[], saved={}; // saved[id]=mtime
+
+// ---------- 저장소(IndexedDB): 받아 둔 파일 ----------
+const DB=()=>new Promise((res,rej)=>{const q=indexedDB.open('ka_viewer',1);q.onupgradeneeded=()=>q.result.createObjectStore('blobs');q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)});
+async function dbGet(k){const d=await DB();return new Promise((res,rej)=>{const r=d.transaction('blobs').objectStore('blobs').get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function dbPut(k,v){const d=await DB();return new Promise((res,rej)=>{const t=d.transaction('blobs','readwrite');t.objectStore('blobs').put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})}
+async function dbKeys(){const d=await DB();return new Promise((res,rej)=>{const r=d.transaction('blobs').objectStore('blobs').getAllKeys();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+
+const setStatus=t=>{$('#status').textContent=t||''};
+const sizeText=n=>{n=+n;if(!n)return'';return n<1048576?(n/1024).toFixed(0)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB'};
+
+// ---------- 로그인 ----------
+function loadToken(){try{const t=JSON.parse(localStorage.getItem('ka_tok')||'null');if(t&&t.exp>Date.now()+60000){token=t.tok;tokenExp=t.exp;return true}}catch(e){}return false}
+function initAuth(){
+  if(!window.google||!google.accounts)return false;
+  tc=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,callback:r=>{
+    if(r.error){setStatus('로그인 실패: '+r.error);$('#login').style.display='block';return}
+    token=r.access_token;tokenExp=Date.now()+(r.expires_in||3600)*1000;
+    try{localStorage.setItem('ka_tok',JSON.stringify({tok:token,exp:tokenExp}))}catch(e){}
+    $('#login').style.display='none';refresh();
+  }});
+  return true;
+}
+$('#btnLogin').onclick=()=>{if(tc||initAuth())tc.requestAccessToken({})};
+
+// ---------- 드라이브 ----------
+async function api(path,params){
+  const u=new URL('https://www.googleapis.com/drive/v3/'+path);
+  for(const k in params)u.searchParams.set(k,params[k]);
+  const r=await fetch(u,{headers:{Authorization:'Bearer '+token}});
+  if(r.status===401){token=null;localStorage.removeItem('ka_tok');throw new Error('auth')}
+  if(!r.ok)throw new Error('api '+r.status);
+  return r;
+}
+async function children(id){
+  let out=[],pt='';
+  do{
+    const p={q:`'${id}' in parents and trashed=false`,pageSize:1000,orderBy:'createdTime',
+      fields:'nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime)'};
+    if(pt)p.pageToken=pt;
+    const j=await (await api('files',p)).json();
+    out=out.concat(j.files||[]);pt=j.nextPageToken||'';
+  }while(pt);
+  return out;
+}
+async function collect(id,path,depth,acc){
+  for(const f of await children(id)){
+    if(f.mimeType==='application/vnd.google-apps.folder'){if(depth<4)await collect(f.id,path?path+' / '+f.name:f.name,depth+1,acc)}
+    else{f.path=path;acc.push(f)}
+  }
+}
+async function refresh(){
+  setStatus('목록 불러오는 중…');
+  try{
+    const roots=(await (await api('files',{q:`name='${ROOT_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)'})).json()).files||[];
+    if(!roots.length){setStatus(`드라이브에서 '${ROOT_NAME}' 폴더를 찾지 못했습니다.`);return}
+    const acc=[];for(const r of roots)await collect(r.id,'',0,acc);
+    acc.sort((a,b)=>new Date(a.createdTime)-new Date(b.createdTime));
+    files=acc;
+    try{localStorage.setItem('ka_list',JSON.stringify(files))}catch(e){}
+    setStatus('');
+  }catch(e){
+    if(e.message==='auth'){setStatus('로그인이 만료되었습니다. 다시 로그인하세요.');$('#login').style.display='block';return}
+    setStatus('목록을 불러오지 못했습니다(오프라인?). 저장된 목록을 보여줍니다.');
+    try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(_){files=[]}
+  }
+  await render();
+}
+
+// ---------- 그리기 ----------
+const ICON=n=>{n=n.toLowerCase();return /\.pdf$/.test(n)?'📕':/\.(jpe?g|png|gif|webp|heic)$/.test(n)?'🖼️':/\.(mp4|mov|m4v|webm)$/.test(n)?'🎞️':/\.(hwp|hwpx)$/.test(n)?'📄':/\.(docx?|xlsx?|pptx?)$/.test(n)?'📘':'📎'};
+async function loadSaved(){saved={};for(const k of await dbKeys()){const v=await dbGet(k);if(v)saved[k]=v.mtime}}
+async function render(){
+  await loadSaved();
+  const L=$('#list');L.innerHTML='';
+  let lastDay='';
+  for(const f of files){
+    const d=new Date(f.createdTime);
+    const day=d.toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
+    if(day!==lastDay){const e=document.createElement('div');e.className='date';e.textContent=day;L.appendChild(e);lastDay=day}
+    const isSaved=saved[f.id]===f.modifiedTime;
+    const m=document.createElement('div');m.className='msg';
+    m.innerHTML=`<div class="avatar">📂</div><div class="col"><div class="who"></div><div class="row"><div class="bubble"><div class="fname"></div><div class="meta"></div></div><div class="time"></div></div></div>`;
+    m.querySelector('.who').textContent=f.path||'파일';
+    m.querySelector('.fname').textContent=ICON(f.name)+' '+f.name;
+    m.querySelector('.meta').innerHTML=(sizeText(f.size)||'')+`<span class="badge ${isSaved?'ok':'no'}">${isSaved?'저장됨':'아직 안 받음'}</span>`;
+    m.querySelector('.time').textContent=d.toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'});
+    m.querySelector('.bubble').onclick=()=>openFile(f);
+    L.appendChild(m);
+  }
+  window.scrollTo(0,document.body.scrollHeight);
+  const todo=files.filter(f=>saved[f.id]!==f.modifiedTime).length;
+  $('#btnAll').textContent=todo?`새 파일 ${todo}개 받기`:'모두 저장됨';
+  $('#btnAll').disabled=!todo||!token;
+  $('#btnRef').style.display='inline-block';$('#btnAll').style.display='inline-block';
+}
+
+// ---------- 받기/열기 ----------
+async function getBlob(f){
+  const c=await dbGet(f.id);
+  if(c&&c.mtime===f.modifiedTime)return c.blob;
+  if(!token)throw new Error('offline');
+  const native=f.mimeType.startsWith('application/vnd.google-apps');
+  const r=native?await api(`files/${f.id}/export`,{mimeType:'application/pdf'}):await api(`files/${f.id}`,{alt:'media'});
+  const blob=await r.blob();
+  await dbPut(f.id,{blob,mtime:f.modifiedTime,name:f.name});
+  return blob;
+}
+async function openFile(f){
+  $('#viewer').classList.add('on');$('#vtitle').textContent=f.name;
+  const B=$('#vbody');B.innerHTML='<div class="other">불러오는 중…</div>';
+  let blob;
+  try{blob=await getBlob(f)}catch(e){
+    B.innerHTML='<div class="other">이 파일은 아직 이 기기에 저장되지 않았고, 지금은 받을 수 없습니다.<br>인터넷이 되는 곳에서 한 번 열어 두세요.</div>';return;
+  }
+  render();
+  const n=f.name.toLowerCase();B.innerHTML='';
+  try{
+    if(/\.pdf$/.test(n)||f.mimeType.startsWith('application/vnd.google-apps')){
+      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const pdf=await pdfjsLib.getDocument({data:await blob.arrayBuffer()}).promise;
+      const w=Math.min(B.clientWidth||800,1000),dpr=Math.min(window.devicePixelRatio||1,2);
+      for(let p=1;p<=pdf.numPages;p++){
+        const pg=await pdf.getPage(p),v0=pg.getViewport({scale:1}),sc=w/v0.width,v=pg.getViewport({scale:sc*dpr});
+        const cv=document.createElement('canvas');cv.width=v.width;cv.height=v.height;cv.style.width=w+'px';
+        B.appendChild(cv);await pg.render({canvasContext:cv.getContext('2d'),viewport:v}).promise;
+      }
+    }else if(/\.(jpe?g|png|gif|webp|heic)$/.test(n)||blob.type.startsWith('image/')){
+      const i=new Image();i.src=URL.createObjectURL(blob);B.appendChild(i);
+    }else if(/\.(mp4|mov|m4v|webm)$/.test(n)||blob.type.startsWith('video/')){
+      const v=document.createElement('video');v.controls=true;v.playsInline=true;v.src=URL.createObjectURL(blob);B.appendChild(v);
+    }else{throw new Error('other')}
+  }catch(e){
+    const a=document.createElement('a');a.className='dl';a.textContent='원본 받기 / 다른 앱으로 열기';
+    a.href=URL.createObjectURL(blob);a.download=f.name;
+    const d=document.createElement('div');d.className='other';
+    d.innerHTML='이 형식은 앱 안에서 바로 볼 수 없습니다.<br>';d.appendChild(a);B.innerHTML='';B.appendChild(d);
+  }
+}
+$('#vclose').onclick=()=>{$('#viewer').classList.remove('on');$('#vbody').innerHTML=''};
+
+$('#btnRef').onclick=()=>{if(token)refresh();else render()};
+$('#btnAll').onclick=async()=>{
+  const todo=files.filter(f=>saved[f.id]!==f.modifiedTime);let n=0,skip=0;
+  for(const f of todo){
+    if(+f.size>MAX_AUTO){skip++;continue}
+    setStatus(`받는 중… ${++n}/${todo.length-skip}  ${f.name}`);
+    try{await getBlob(f)}catch(e){setStatus('받기 실패: '+f.name);break}
+  }
+  setStatus(skip?`${skip}개는 용량이 커서 건너뜀(눌러서 개별로 받으세요)`:'');
+  await render();
+};
+
+// ---------- 시작 ----------
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+(async function(){
+  await loadSaved();
+  try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(e){files=[]}
+  if(files.length)await render();
+  if(loadToken()){$('#btnRef').style.display='inline-block';refresh();return}
+  // GIS 스크립트가 늦게 올 수 있어 잠시 기다림
+  let t=0;const iv=setInterval(()=>{
+    if(initAuth()||++t>20){clearInterval(iv);
+      if(!token){ $('#login').style.display=files.length&&!navigator.onLine?'none':'block';
+        if(!navigator.onLine&&files.length)setStatus('오프라인: 저장된 파일만 열 수 있습니다.');}}
+  },300);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "태블릿 자료",
+  "short_name": "태블릿 자료",
+  "description": "드라이브의 태블릿자료 폴더를 카카오톡처럼 시간순으로 보는 자료함",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#abc1d1",
+  "theme_color": "#abc1d1",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

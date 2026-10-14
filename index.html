@@ -65,7 +65,7 @@ a.dl{display:inline-block;margin-top:16px;padding:12px 20px;border-radius:20px;b
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 const CLIENT_ID='295721508542-9t99o38p451rph28b1bf83u1ibi3hrq3.apps.googleusercontent.com';
-const ROOT_NAME='태블릿자료';
+const ROOT_NAMES=['태블릿 자료','태블릿자료']; // 띄어쓰기 유무 둘 다 허용
 const SCOPE='https://www.googleapis.com/auth/drive.readonly';
 const MAX_AUTO=150*1024*1024; // 모두 받기에서 건너뛸 큰 파일
 const $=s=>document.querySelector(s);
@@ -123,8 +123,8 @@ async function collect(id,path,depth,acc){
 async function refresh(){
   setStatus('목록 불러오는 중…');
   try{
-    const roots=(await (await api('files',{q:`name='${ROOT_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)'})).json()).files||[];
-    if(!roots.length){setStatus(`드라이브에서 '${ROOT_NAME}' 폴더를 찾지 못했습니다.`);return}
+    const roots=(await (await api('files',{q:`(${ROOT_NAMES.map(n=>`name='${n}'`).join(' or ')}) and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)'})).json()).files||[];
+    if(!roots.length){setStatus(`드라이브에서 '${ROOT_NAMES[0]}' 폴더를 찾지 못했습니다.`);return}
     const acc=[];for(const r of roots)await collect(r.id,'',0,acc);
     acc.sort((a,b)=>new Date(a.createdTime)-new Date(b.createdTime));
     files=acc;

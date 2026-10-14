@@ -11,7 +11,7 @@
 <style>
 :root{--bg:#abc1d1;--bar:#9bb3c4;--bubble:#fff;--ink:#222;--sub:#556;--accent:#fae100}
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
 #top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:var(--bar)}
 #top h1{margin:0;font-size:18px;flex:1}
 button{font:inherit;border:0;border-radius:18px;padding:8px 14px;background:#fff;color:var(--ink)}
@@ -282,7 +282,18 @@ async function openFile(f){
     const a=document.createElement('a');a.className='dl';a.textContent='원본 받기 / 다른 앱으로 열기';
     a.href=URL.createObjectURL(blob);a.download=f.name;
     const d=document.createElement('div');d.className='other';
-    d.innerHTML='이 형식은 앱 안에서 바로 볼 수 없습니다.<br>';d.appendChild(a);B.innerHTML='';B.appendChild(d);
+    d.innerHTML='이 형식은 앱 안에서 바로 볼 수 없습니다.<br>';
+    // 아이패드/갤럭시탭의 공유 시트로 한컴 뷰어 등 설치된 앱에 바로 넘긴다(지원되는 경우만 버튼 표시)
+    try{
+      const file=new File([blob],f.name,{type:blob.type||'application/octet-stream'});
+      if(navigator.canShare&&navigator.canShare({files:[file]})){
+        const b=document.createElement('button');b.className='primary';b.textContent='다른 앱으로 열기 (공유)';
+        b.style.cssText='display:block;margin:16px auto 0;font-size:16px;padding:12px 22px';
+        b.onclick=()=>navigator.share({files:[file],title:f.name}).catch(()=>{});
+        d.appendChild(b);
+      }
+    }catch(_){}
+    d.appendChild(a);B.innerHTML='';B.appendChild(d);
   }
 }
 $('#vclose').onclick=()=>{$('#viewer').classList.remove('on');$('#vbody').innerHTML=''};

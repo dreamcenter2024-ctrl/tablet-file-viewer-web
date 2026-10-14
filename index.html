@@ -194,8 +194,11 @@ async function refresh(){
 // ---------- 그리기 ----------
 const ICON=n=>{n=n.toLowerCase();return /\.pdf$/.test(n)?'📕':/\.(jpe?g|png|gif|webp|heic)$/.test(n)?'🖼️':/\.(mp4|mov|m4v|webm)$/.test(n)?'🎞️':/\.(hwp|hwpx)$/.test(n)?'📄':/\.(docx?|xlsx?|pptx?)$/.test(n)?'📘':'📎'};
 async function loadSaved(){saved={};for(const k of await dbKeys()){const v=await dbGet(k);if(v)saved[k]=v.mtime}}
+let firstRender=true;
 async function render(){
   await loadSaved();
+  // 자동 새로고침 때 보던 위치를 뺏지 않도록: 처음이거나 맨 아래 근처에 있을 때만 맨 아래로 이동
+  const nearBottom=firstRender||(window.innerHeight+window.scrollY>=document.body.scrollHeight-300),keepY=window.scrollY;
   const L=$('#list');L.innerHTML='';
   // 대화 기록과 드라이브 파일을 합쳐 시간순 목록을 만든다(파일은 이름으로 짝지음)
   const used=new Set(),byName={},items=[];
@@ -236,7 +239,8 @@ async function render(){
     d.querySelector('.meta').innerHTML=(sizeText(f.size)||'')+`<span class="badge ${isSaved?'ok':'no'}">${isSaved?'저장됨':'아직 안 받음'}</span>`;
     const m=mk(it,d);m.querySelector('.bubble').onclick=()=>openFile(f);L.appendChild(m);
   }
-  window.scrollTo(0,document.body.scrollHeight);
+  if(nearBottom)window.scrollTo(0,document.body.scrollHeight);else window.scrollTo(0,keepY);
+  firstRender=false;
   const todo=files.filter(f=>saved[f.id]!==f.modifiedTime).length;
   $('#btnAll').textContent=todo?`새 파일 ${todo}개 받기`:'모두 저장됨';
   $('#btnAll').disabled=!todo||!token;
@@ -309,6 +313,20 @@ $('#btnAll').onclick=async()=>{
   setStatus(skip?`${skip}개는 용량이 커서 건너뜀(눌러서 개별로 받으세요)`:'');
   await render();
 };
+
+// ---------- 자동 새로고침 / 맨 아래에서 위로 당겨 새로고침 ----------
+async function autoRefresh(){
+  if(!token||Date.now()>=tokenExp||!navigator.onLine||window.__busy)return;
+  window.__busy=1;try{await refresh()}finally{window.__busy=0}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')autoRefresh()});
+setInterval(()=>{if(document.visibilityState==='visible')autoRefresh()},90000);
+let ty0=0,atBottom=false;
+addEventListener('touchstart',e=>{ty0=e.touches[0].clientY;atBottom=(innerHeight+scrollY>=document.body.scrollHeight-5)},{passive:true});
+addEventListener('touchend',e=>{
+  const dy=e.changedTouches[0].clientY-ty0;
+  if(atBottom&&dy<-80&&!$('#viewer').classList.contains('on')){setStatus('새로고침 중…');autoRefresh()}
+},{passive:true});
 
 // ---------- 시작 ----------
 if('serviceWorker' in navigator){

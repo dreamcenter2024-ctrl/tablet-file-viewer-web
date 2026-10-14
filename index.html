@@ -258,7 +258,19 @@ async function getBlob(f){
   await dbPut(f.id,{blob,mtime:f.modifiedTime,name:f.name});
   return blob;
 }
+const VIEWABLE=n=>/\.(pdf|jpe?g|png|gif|webp|heic|mp4|mov|m4v|webm)$/i.test(n);
+function saveToDevice(blob,name){
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},60000);
+}
 async function openFile(f){
+  // 앱 안에서 볼 수 없는 형식(한글 등)은 중간 화면 없이 바로 기기로 받는다 -> 닫는 단계가 줄어든다. 안 되면 아래의 기존 화면으로 넘어간다.
+  if(!VIEWABLE(f.name)&&!f.mimeType.startsWith('application/vnd.google-apps')){
+    try{
+      const b=await getBlob(f);saveToDevice(b,f.name);
+      setStatus(f.name+' 을(를) 받았습니다. 사파리 주소창 옆 다운로드(↓) 표시에서 열어 주세요.');render();return;
+    }catch(e){/* 받기에 실패하면 아래 화면으로 */}
+  }
   $('#viewer').classList.add('on');$('#vtitle').textContent=f.name;
   const B=$('#vbody');B.innerHTML='<div class="other">불러오는 중…</div>';
   let blob;

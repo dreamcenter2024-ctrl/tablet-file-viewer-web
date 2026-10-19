@@ -48,6 +48,8 @@ button.primary{background:var(--accent)}
 #vbody canvas{display:block;margin:0 auto 8px;max-width:100%;background:#fff}
 #vbody img,#vbody video{max-width:100%;max-height:100%}
 #vbody .other{color:#fff;padding:40px 20px}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 a.dl{display:inline-block;margin-top:16px;padding:12px 20px;border-radius:20px;background:var(--accent);color:#111;text-decoration:none}
 </style>
 </head>
@@ -55,7 +57,7 @@ a.dl{display:inline-block;margin-top:16px;padding:12px 20px;border-radius:20px;b
 <div id="top">
   <h1>태블릿 자료</h1>
   <button id="btnAll" class="primary" style="display:none">새 파일 모두 받기</button>
-  <button id="btnRef" style="display:none">새로고침</button>
+  <button id="btnRef" style="display:none"><span id="rfi">↻</span> 새로고침</button>
 </div>
 <div id="status"></div>
 <div id="login" style="display:none">
@@ -181,7 +183,12 @@ async function loadChats(){
   chatMsgs=all;
   try{localStorage.setItem('ka_chat',JSON.stringify(chatMsgs))}catch(e){}
 }
+// 새로고침 중에는 버튼의 ↻가 계속 돈다(끝나면 멈춘다)
 async function refresh(){
+  const ri=document.getElementById('rfi');if(ri)ri.classList.add('spin');
+  try{await refreshInner()}finally{if(ri)ri.classList.remove('spin')}
+}
+async function refreshInner(){
   setStatus('목록 불러오는 중…');
   try{
     const roots=(await (await api('files',{q:`(${ROOT_NAMES.map(n=>`name='${n}'`).join(' or ')}) and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)'})).json()).files||[];

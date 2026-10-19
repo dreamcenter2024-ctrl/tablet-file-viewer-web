@@ -128,14 +128,15 @@ async function children(id){
   return out;
 }
 async function collect(id,path,depth,acc){
-  for(const f of await children(id)){
+  // 같은 단계의 폴더는 동시에 읽는다(한 개씩 기다리면 폴더가 많을 때 오래 걸림)
+  await Promise.all((await children(id)).map(async f=>{
     if(f.mimeType==='application/vnd.google-apps.folder'){
       // kakaochats 폴더는 파일 목록에 넣지 않고, 대화 기록(txt) 읽기에만 쓴다
-      if(f.name.toLowerCase()==='kakaochats'){chatFolders.push(f.id);continue}
+      if(f.name.toLowerCase()==='kakaochats'){chatFolders.push(f.id);return}
       if(depth<4)await collect(f.id,path?path+' / '+f.name:f.name,depth+1,acc)
     }
     else{f.path=path;acc.push(f)}
-  }
+  }));
 }
 
 // ---------- 대화 기록(카톡 '대화 내용 내보내기' txt) ----------
@@ -162,14 +163,21 @@ function parseChat(txt,room){
   return out;
 }
 async function loadChats(){
-  const all=[];
-  for(const id of chatFolders){
-    for(const f of await children(id)){
-      if(!/\.txt$/i.test(f.name))continue;
+  // 대화 기록 txt는 바뀌었을 때만 새로 받는다(수정 시각이 같으면 저장해 둔 글을 그대로 씀)
+  let cache={};try{cache=JSON.parse(localStorage.getItem('ka_txt')||'{}')}catch(e){}
+  const jobs=[];
+  for(const id of chatFolders)for(const f of await children(id))if(/\.txt$/i.test(f.name))jobs.push(f);
+  const all=(await Promise.all(jobs.map(async f=>{
+    let c=cache[f.id];
+    if(!c||c.mod!==f.modifiedTime){
       const t=await (await api(`files/${f.id}`,{alt:'media'})).text();
-      all.push(...parseChat(t,f.name.replace(/\.txt$/i,'')));
+      c={mod:f.modifiedTime,text:t};cache[f.id]=c;
     }
-  }
+    return parseChat(c.text,f.name.replace(/\.txt$/i,''));
+  }))).flat();
+  // 드라이브에서 사라진 파일의 저장분은 지운다
+  const live=new Set(jobs.map(f=>f.id));for(const k of Object.keys(cache))if(!live.has(k))delete cache[k];
+  try{localStorage.setItem('ka_txt',JSON.stringify(cache))}catch(e){}
   chatMsgs=all;
   try{localStorage.setItem('ka_chat',JSON.stringify(chatMsgs))}catch(e){}
 }
@@ -182,7 +190,10 @@ async function refresh(){
     acc.sort((a,b)=>new Date(a.createdTime)-new Date(b.createdTime));
     files=acc;
     try{localStorage.setItem('ka_list',JSON.stringify(files))}catch(e){}
-    try{await loadChats()}catch(e){if(e.message==='auth')throw e;setStatus('대화 기록을 읽지 못했습니다.');}
+    // 파일 목록이 준비되면 먼저 화면에 그린다(대화 기록은 뒤에서 이어서 붙는다)
+    setStatus('대화 기록 불러오는 중…');
+    await render();
+    try{await loadChats();await render()}catch(e){if(e.message==='auth')throw e;setStatus('대화 기록을 읽지 못했습니다.');}
     if(!$('#status').textContent)setStatus('');
   }catch(e){
     if(e.message==='auth'){setStatus('로그인이 만료되었습니다. 다시 로그인하세요.');$('#login').style.display='block';return}

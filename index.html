@@ -88,6 +88,11 @@ const DB=()=>new Promise((res,rej)=>{const q=indexedDB.open('ka_viewer',1);q.onu
 async function dbGet(k){const d=await DB();return new Promise((res,rej)=>{const r=d.transaction('blobs').objectStore('blobs').get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
 async function dbPut(k,v){const d=await DB();return new Promise((res,rej)=>{const t=d.transaction('blobs','readwrite');t.objectStore('blobs').put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})}
 async function dbKeys(){const d=await DB();return new Promise((res,rej)=>{const r=d.transaction('blobs').objectStore('blobs').getAllKeys();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function dbDel(k){const d=await DB();return new Promise((res,rej)=>{const t=d.transaction('blobs','readwrite');t.objectStore('blobs').delete(k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})}
+// 마지막으로 연 시각(기기별). 한 달 넘게 안 연 저장본은 자동으로 지운다.
+const AUTO_DAYS=30;
+function touch(id){try{const m=JSON.parse(localStorage.getItem('ka_last')||'{}');m[id]=Date.now();localStorage.setItem('ka_last',JSON.stringify(m))}catch(e){}}
+async function cleanOld(){try{const m=JSON.parse(localStorage.getItem('ka_last')||'{}');const now=Date.now();for(const k of await dbKeys()){const last=m[k]||0;if(!last){m[k]=now;continue}if(now-last>AUTO_DAYS*86400000){await dbDel(k);delete m[k]}}localStorage.setItem('ka_last',JSON.stringify(m))}catch(e){}}
 
 const setStatus=t=>{$('#status').textContent=t||''};
 const sizeText=n=>{n=+n;if(!n)return'';return n<1048576?(n/1024).toFixed(0)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB'};
@@ -280,7 +285,7 @@ function showProgress(id,p){
 }
 async function getBlob(f){
   const c=await dbGet(f.id);
-  if(c&&c.mtime===f.modifiedTime)return c.blob;
+  if(c&&c.mtime===f.modifiedTime){touch(f.id);return c.blob}
   if(!token)throw new Error('offline');
   const native=f.mimeType.startsWith('application/vnd.google-apps');
   const r=native?await api(`files/${f.id}/export`,{mimeType:'application/pdf'}):await api(`files/${f.id}`,{alt:'media'});
@@ -301,7 +306,7 @@ async function getBlob(f){
   }else{
     blob=await r.blob();
   }
-  await dbPut(f.id,{blob,mtime:f.modifiedTime,name:f.name});
+  await dbPut(f.id,{blob,mtime:f.modifiedTime,name:f.name});touch(f.id);
   delete prog[f.id];
   return blob;
 }
@@ -418,6 +423,7 @@ if('serviceWorker' in navigator){
   navigator.serviceWorker.register('sw.js').then(reg=>reg.update()).catch(()=>{});
 }
 (async function(){
+  await cleanOld();
   await loadSaved();
   try{files=JSON.parse(localStorage.getItem('ka_list')||'[]')}catch(e){files=[]}
   try{chatMsgs=JSON.parse(localStorage.getItem('ka_chat')||'[]')}catch(e){chatMsgs=[]}
